@@ -1,4 +1,5 @@
-<img src="titanium-forge.png">
+<center><img src="titanium-forge.png"></center>
+
 # Titanium Forge (tiforge)
 
 Distributed [Titanium SDK](https://titaniumsdk.com) builds: work on one machine,
