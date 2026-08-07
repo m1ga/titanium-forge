@@ -1,0 +1,19 @@
+{
+  "name": "titanium-forge",
+  "version": "0.1.0",
+  "description": "Distributed Titanium SDK builds: sync a project to remote machines and build there",
+  "bin": {
+    "tiforge": "bin/tiforge.js",
+    "tiforged": "bin/tiforged.js"
+  },
+  "main": "lib/client.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "bonjour-service": "^1.2.1",
+    "tar-fs": "^3.0.6",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}
