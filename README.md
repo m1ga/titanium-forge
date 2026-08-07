@@ -1,4 +1,5 @@
-# tiForge
+<img src="titanium-forge.png">
+# Titanium Forge (tiforge)
 
 Distributed [Titanium SDK](https://titaniumsdk.com) builds: work on one machine,
 build on others. Typical setup: you develop on Linux, a Mac on your network runs
