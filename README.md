@@ -27,7 +27,7 @@ alloy compiler regenerates during the remote build.
 
 ## Setup
 
-Requires Node ≥ 18 on both machines.
+Requires Node ≥ 22 on both machines.
 
 ### On the build machine (Mac)
 
@@ -79,8 +79,12 @@ ti forge --discover       # list tiForge daemons on the network
 Remote output appears prefixed with `[tiForge:mac]`, uploads show live progress.
 The daemon always enforces `--no-prompt` so nothing hangs on the other machine.
 Builds run one at a time per daemon; extra builds queue and the client shows the
-queue position. `--force` clears the way: the running build is killed (including
-its xcodebuild children) and queued ones are cancelled.
+queue position. A new build of a project automatically supersedes older builds
+of the *same* project — running ones are killed, queued ones cancelled — so a
+lingering simulator session never blocks your next build. Builds of other
+projects are left alone and queue normally. `--force` remains the big hammer:
+it kills and cancels *all* builds on the daemon (including its xcodebuild
+children), regardless of project.
 
 The same commands exist without the ti CLI (e.g. for CI): `tiforge sync`,
 `tiforge build [-- <remote args>]`, `tiforge init`, `tiforge discover`. Make

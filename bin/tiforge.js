@@ -49,32 +49,7 @@ it for one run.
 `;
 
 const { DEFAULT_BUILD_ARGS } = require('../lib/init');
-
-function parseArgv(argv) {
-  const out = { _: [], flags: {}, rest: [] };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--') {
-      out.rest = argv.slice(i + 1);
-      break;
-    }
-    if (a.startsWith('--no-')) {
-      out.flags[a.slice(5)] = false;
-    } else if (a.startsWith('--')) {
-      const key = a.slice(2);
-      const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--')) {
-        out.flags[key] = next;
-        i++;
-      } else {
-        out.flags[key] = true;
-      }
-    } else {
-      out._.push(a);
-    }
-  }
-  return out;
-}
+const { parseArgv } = require('../lib/args');
 
 function die(msg) {
   console.error('tiforge: ' + msg);
