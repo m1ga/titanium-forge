@@ -59,11 +59,13 @@ ti config forge.hosts.mac.url http://192.168.1.3:7331
 ti config forge.hosts.mac.token SOME_SECRET
 ti config forge.hosts.mac.buildArgs "-p ios -T simulator --no-prompt"
 ti config forge.hosts.mac.dir /Volumes/SSD/builds   # optional, see below
+ti config forge.token SOME_SECRET         # optional, fallback for hosts without a token
 ti config forge.exclude "tmp,docs"        # optional, comma/space separated
 ```
 
 Every host under `forge.hosts.*` takes part in syncs and builds. `buildArgs` is
-a space-separated string (ti config values are strings).
+a space-separated string (ti config values are strings). A host without its own
+`token` uses `forge.token`.
 
 ## Usage
 
@@ -74,6 +76,8 @@ ti forge --clear          # stop all builds and empty the queue, nothing else
 ti forge --sync           # only push changed files, no build
 ti forge --init           # discover daemons into ti config
 ti forge --discover       # list tiForge daemons on the network
+ti forge --url http://192.168.1.9:7331 --token S   # one ad-hoc daemon instead of the configured hosts
+ti forge --dir /Volumes/SSD/builds                 # mirror directory override for this run
 ```
 
 Remote output appears prefixed with `[tiForge:mac]`, uploads show live progress.
@@ -86,6 +90,12 @@ projects are left alone and queue normally. `--force` remains the big hammer:
 it kills and cancels *all* builds on the daemon (including its xcodebuild
 children), regardless of project.
 
+Ctrl+C during a build cancels that build on the daemon and waits for its last
+log lines. A second Ctrl+C quits at once and leaves the build running. When the
+daemon itself is stopped (Ctrl+C or SIGTERM), it kills the running build and
+cancels the queued ones before it exits, because builds run detached and the
+signal does not reach them on its own.
+
 The same commands exist without the ti CLI (e.g. for CI): `tiforge sync`,
 `tiforge build [-- <remote args>]`, `tiforge init`, `tiforge discover`. Make
 `tiforge` available everywhere with `npm link` or by symlinking `bin/tiforge.js`
@@ -97,12 +107,16 @@ The mirror is named after your project's own directory, so `~/dev/MyApp` builds
 in `MyApp` — not under its bundle id. Characters a path segment cannot carry are
 folded to `-`; `--name` overrides the name outright.
 
+The daemon keeps a hash cache for each mirror in `<root>/.manifest-cache/`, so
+a restart does not re-hash every project on the first sync. The cache is an
+optimization only: delete the directory and the next sync rebuilds it.
+
 By default a project lands in `~/.tiforge/projects/MyApp`. Set `dir` on a host
 to mirror somewhere else instead — an absolute path **on the daemon machine**,
 per host, created if it does not exist. The project name is still appended, so
 one `dir` serves several projects. Changing it starts an empty mirror at the new
 location (the next sync uploads everything once) and leaves the old copy behind.
-Outside the ti CLI, `tiforge sync`/`build` take `--dir PATH` for a single run.
+`ti forge` and `tiforge sync`/`build` take `--dir PATH` for a single run.
 
 ## Security notes
 
@@ -119,12 +133,14 @@ Outside the ti CLI, `tiforge sync`/`build` take `--dir PATH` for a single run.
 
 | Route | Meaning |
 | --- | --- |
-| `GET /ping` | daemon name, platform, version |
-| `POST /projects/:name/manifest` | body `{files, exclude}` → `{needed, deleted}` |
+| `GET /ping` | `{name, platform, version}` of the daemon |
+| `POST /projects/:name/manifest` | body `{files, exclude, purge}` → `{needed, deleted}`; `purge` lists generated dirs to delete from the mirror first (`Resources` in an Alloy project) |
 | `POST /projects/:name/files` | gzipped tar of the needed files |
-| `POST /projects/:name/build` | body `{args}` → `{buildId}` (builds run serially) |
+| `POST /projects/:name/build` | body `{args}` → `{buildId, ahead}` (builds run serially; `ahead` is the queue position) |
 | `GET /builds/:id` | status + exit code |
-| `WS /builds/:id/log` | `{type:'log',data}` frames, then `{type:'exit',code}` |
+| `POST /builds/:id/cancel` | kill that build if running, drop it if queued → `{cancelled}` |
+| `POST /builds/cancel` | the same for every build on the daemon → `{cancelled}` |
+| `WS /builds/:id/log` | `{type:'status',status}` and `{type:'log',data}` frames, then `{type:'exit',code}` |
 
 Auth on every route via the `x-tiforge-token` header. The three
 `/projects/:name/*` routes accept `?dir=<absolute path>` to override the

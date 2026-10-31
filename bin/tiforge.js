@@ -21,6 +21,7 @@ Usage:
       Sync, then build on the configured hosts. Args after "--" are passed
       to "ti build" on the remote machine (default: the host's buildArgs
       from ti config, falling back to "-p ios --build-only --no-prompt").
+      Ctrl+C cancels the remote build; a second Ctrl+C quits at once.
 
   tiforge clear [projectDir] [--url ...] [--token ...]
       Stop all builds and empty the queue on the configured daemons.
@@ -40,6 +41,7 @@ Config lives in "ti config" (~/.titanium/config.json) under the "forge" node:
   ti config forge.hosts.mac.token SECRET
   ti config forge.hosts.mac.buildArgs "-p ios --build-only --no-prompt"
   ti config forge.hosts.mac.dir /Volumes/SSD/builds
+  ti config forge.token SECRET            # fallback for hosts without a token
   ti config forge.exclude "tmp,docs"
 
 "dir" is an absolute path on the daemon machine to mirror projects into,
@@ -57,33 +59,32 @@ function die(msg) {
 }
 
 function resolveHosts(projectDir, flags) {
-  const { loadConfig, projectName } = require('../lib/config');
-  const cfg = loadConfig(projectDir);
-  let hosts = cfg.hosts;
-  if (flags.url) {
-    hosts = [{ name: 'cli', url: flags.url, token: flags.token || null, dir: null }];
-  }
-  if (typeof flags.dir === 'string') {
-    hosts = hosts.map((h) => ({ ...h, dir: flags.dir }));
-  }
-  if (!hosts.length) {
+  const cfg = require('../lib/config').resolveHosts(projectDir, flags);
+  if (!cfg.hosts.length) {
     die('no hosts configured — run "tiforge init" to discover them into ti config, or pass --url');
   }
-  // --name goes through the same sanitising as the derived name, so it cannot
-  // produce a name the daemon rejects
-  return { cfg, hosts, name: flags.name ? projectName(projectDir, flags.name) : cfg.name };
+  return cfg;
+}
+
+// Ctrl+C cancels the remote build instead of leaving it running on the
+// daemon. The listener is one-shot, so a second Ctrl+C gets Node's default
+// handling and quits at once.
+function abortOnSigint() {
+  const ac = new AbortController();
+  process.once('SIGINT', () => ac.abort());
+  return ac.signal;
 }
 
 async function cmdSync(args) {
   const projectDir = path.resolve(args._[1] || '.');
-  const { cfg, hosts, name } = resolveHosts(projectDir, args.flags);
+  const cfg = resolveHosts(projectDir, args.flags);
   const { syncProject, renderProgress } = require('../lib/client');
-  for (const host of hosts) {
+  for (const host of cfg.hosts) {
     const label = host.name || host.url;
     await syncProject({
       url: host.url,
       token: host.token,
-      name,
+      name: cfg.name,
       projectDir,
       dir: host.dir,
       exclude: cfg.exclude,
@@ -95,10 +96,12 @@ async function cmdSync(args) {
 
 async function cmdBuild(args) {
   const projectDir = path.resolve(args._[1] || '.');
-  const { cfg, hosts, name } = resolveHosts(projectDir, args.flags);
+  const cfg = resolveHosts(projectDir, args.flags);
   const { runRemote, renderProgress, cancelBuilds } = require('../lib/client');
+  const signal = abortOnSigint();
   let failed = false;
-  for (const host of hosts) {
+  for (const host of cfg.hosts) {
+    if (signal.aborted) break;
     const label = host.name || host.url;
     const buildArgs = args.rest.length ? args.rest : host.buildArgs || DEFAULT_BUILD_ARGS;
     try {
@@ -111,10 +114,11 @@ async function cmdBuild(args) {
       }
       const { exitCode } = await runRemote({
         host,
-        name,
+        name: cfg.name,
         projectDir,
         exclude: cfg.exclude,
         buildArgs,
+        signal,
         log: (msg) => console.log(`[${label}] ${msg}`),
         onLine: (line) => console.log(`[${label}] ${line}`),
         onProgress: renderProgress(`[${label}] `),
@@ -191,7 +195,7 @@ function cmdInstall() {
 
 async function main() {
   const args = parseArgv(process.argv.slice(2));
-  const cmd = args._[0];
+  const cmd = args.flags.help ? undefined : args._[0];
   switch (cmd) {
     case 'daemon':
       return cmdDaemon(args);

@@ -10,6 +10,10 @@
 //   ti forge --init         discover daemons into ti config (forge.hosts)
 //   ti forge --discover     list tiForge daemons on the network
 //   ti forge --name ID      override the mirror directory name on the daemon
+//   ti forge --url URL      build on one ad-hoc daemon instead of the configured hosts
+//   ti forge --dir PATH     override the mirror directory on the daemon(s) for this run
+//
+// Ctrl+C during a build cancels it on the daemon; a second Ctrl+C quits at once.
 
 const path = require('path');
 
@@ -56,6 +60,15 @@ exports.config = function (logger, config, cli) {
       name: {
         desc: 'name of the mirror directory on the daemon (default: the project folder name)',
       },
+      url: {
+        desc: 'daemon URL to use instead of the configured hosts (http://host:7331)',
+      },
+      token: {
+        desc: 'token for --url (default: forge.token from ti config)',
+      },
+      dir: {
+        desc: 'absolute path on the daemon machine to mirror into, replacing each host\'s dir',
+      },
       timeout: {
         default: 3000,
         desc: 'mDNS discovery timeout in milliseconds',
@@ -89,19 +102,30 @@ exports.run = function (logger, config, cli, finished) {
       return;
     }
 
-    const { loadConfig, projectName } = require(path.join(LIB, 'config'));
+    const { resolveHosts } = require(path.join(LIB, 'config'));
     const { syncProject, runRemote, renderProgress, cancelBuilds } = require(path.join(LIB, 'client'));
     const { DEFAULT_BUILD_ARGS } = require(path.join(LIB, 'init'));
-    const cfg = loadConfig(projectDir);
-    // --name goes through the same sanitising as the derived name (as in
-    // bin/tiforge.js), so it cannot produce a name the daemon rejects
-    if (cli.argv.name) cfg.name = projectName(projectDir, cli.argv.name);
+    const cfg = resolveHosts(projectDir, {
+      url: cli.argv.url,
+      token: cli.argv.token,
+      dir: cli.argv.dir,
+      name: cli.argv.name,
+    });
     if (!cfg.hosts.length) {
-      throw new Error('no hosts configured — run "ti forge --init" first (stores hosts in ti config)');
+      throw new Error(
+        'no hosts configured — run "ti forge --init" first (stores hosts in ti config), or pass --url'
+      );
     }
+
+    // Ctrl+C cancels the remote build instead of leaving it running on the
+    // daemon. The listener is one-shot, so a second Ctrl+C gets Node's
+    // default handling and quits at once.
+    const ac = new AbortController();
+    process.once('SIGINT', () => ac.abort());
 
     let failed = false;
     for (const host of cfg.hosts) {
+      if (ac.signal.aborted) break;
       const label = host.name || host.url;
       const prefix = '\x1b[36m[tiForge:' + label + ']\x1b[0m ';
       const write = (line) => process.stdout.write(prefix + line + '\n');
@@ -131,6 +155,7 @@ exports.run = function (logger, config, cli, finished) {
             projectDir,
             exclude: cfg.exclude,
             buildArgs: host.buildArgs || DEFAULT_BUILD_ARGS,
+            signal: ac.signal,
             log: write,
             onLine: write,
             onProgress: renderProgress(prefix),

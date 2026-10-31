@@ -32,3 +32,9 @@ test('value flags keep their string values', () => {
 test('unknown flags throw instead of being silently accepted', () => {
   assert.throws(() => parseArgv(['build', '--bogus']));
 });
+
+test('--help and -h are accepted', () => {
+  assert.strictEqual(parseArgv(['--help']).flags.help, true);
+  assert.strictEqual(parseArgv(['-h']).flags.help, true);
+  assert.strictEqual(parseArgv(['build']).flags.help, false);
+});

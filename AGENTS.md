@@ -36,7 +36,7 @@ almost always needs the same treatment in both front ends.
 
 ## Conventions
 
-- **Plain CommonJS, Node ≥ 18, no build step.** Every file starts with
+- **Plain CommonJS, Node ≥ 22, no build step.** Every file starts with
   `'use strict';` and ends with `module.exports = { ... }`.
 - **Three runtime dependencies** (`ws`, `tar-fs`, `bonjour-service`). Everything
   else is Node stdlib. Don't add dependencies without a clear reason — this is
@@ -62,9 +62,12 @@ almost always needs the same treatment in both front ends.
 ## Testing
 
 `npm test` runs `node --test test/*.test.js` (no extra dependencies). It
-covers argv parsing, project-name sanitising, the manifest walk/diff, and
-the daemon end to end: an in-process daemon on an ephemeral port with
-`test/fixtures/fake-ti.js` standing in for `ti`, driven through `lib/client.js`.
+covers argv parsing, host resolution and project-name sanitising, the
+manifest walk/diff, and the daemon end to end: an in-process daemon on an
+ephemeral port with `test/fixtures/fake-ti.js` standing in for `ti`, driven
+through `lib/client.js`. The daemon takes two test-only options: `exit` (a
+stub for `process.exit`) and `signals: false` (no SIGINT/SIGTERM listeners on
+the test process); `server.shutdown()` drives the shutdown path directly.
 Add a test there when you touch sync, the queue, or a route — the daemon
 tests are cheap (the whole suite runs in under a second).
 
@@ -112,3 +115,10 @@ If you change anything, say plainly which of these you actually ran.
   `exclude` is comma/space-separated; both go through `splitList`.
 - **Builds run one at a time per daemon**, serialised on a promise chain with a
   `queueDepth` counter. Cancellation walks the whole `builds` map.
+- **Builds are detached**, so signals to the daemon never reach them. The
+  daemon's `shutdown` kills them itself; the client cancels its own build on
+  Ctrl+C through `POST /builds/:id/cancel`. Keep both when touching the queue.
+- **The daemon's manifest cache is invalidated per uploaded entry** (the tar
+  header names) and mirrored to `<root>/.manifest-cache/`. If an upload can
+  change a mirror entry without a tar header naming it, drop its cache entry
+  too, or that file re-uploads forever.

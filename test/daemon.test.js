@@ -25,6 +25,7 @@ async function startTestDaemon(t, opts = {}) {
     advertise: false,
     buildCmd: [process.execPath, FAKE_TI],
     log: () => {},
+    signals: false, // no SIGINT/SIGTERM listeners on the test process
     ...opts,
   });
   await once(server, 'listening');
@@ -32,7 +33,7 @@ async function startTestDaemon(t, opts = {}) {
     server.closeAllConnections();
     server.close();
   });
-  return { url: `http://127.0.0.1:${server.address().port}`, root };
+  return { url: `http://127.0.0.1:${server.address().port}`, root, server };
 }
 
 function makeProject(t, files) {
@@ -46,12 +47,31 @@ function makeProject(t, files) {
 
 // remoteBuild resolves when the build exits; this starts one and also reports
 // when the daemon has accepted it (first log line), so tests can sequence
-// submissions deterministically.
+// submissions deterministically. `pid` resolves with the fake-ti process id
+// once it is running.
 function startBuild(opts) {
   let accepted;
+  let gotPid;
   const acceptedP = new Promise((r) => (accepted = r));
-  const result = remoteBuild({ ...opts, log: () => accepted() });
-  return { result, accepted: acceptedP };
+  const pid = new Promise((r) => (gotPid = r));
+  const result = remoteBuild({
+    ...opts,
+    log: () => accepted(),
+    onLine: (l) => {
+      const m = l.match(/^fake-ti pid: (\d+)/);
+      if (m) gotPid(Number(m[1]));
+    },
+  });
+  return { result, accepted: acceptedP, pid };
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 test('sync + build round trip', async (t) => {
@@ -186,4 +206,90 @@ test('purge never reaches outside or at the project dir itself', async (t) => {
   assert.strictEqual(res.status, 200);
   assert.ok(fs.existsSync(path.join(root, 'demo')), 'project dir must survive');
   assert.ok(fs.existsSync(path.join(root, 'outside.txt')));
+});
+
+test('aborting the signal cancels that build only', async (t) => {
+  const { url } = await startTestDaemon(t);
+  const projA = makeProject(t, { 'a.txt': 'a' });
+  const projB = makeProject(t, { 'b.txt': 'b' });
+  await syncProject({ url, name: 'appA', projectDir: projA });
+  await syncProject({ url, name: 'appB', projectDir: projB });
+
+  const ac = new AbortController();
+  const a = startBuild({ url, name: 'appA', args: ['--sleep', '60000'], signal: ac.signal });
+  const pid = await a.pid;
+  assert.ok(isAlive(pid));
+  const b = startBuild({ url, name: 'appB', args: [] });
+  await b.accepted;
+
+  ac.abort();
+  const [ra, rb] = await Promise.all([a.result, b.result]);
+  assert.notStrictEqual(ra.exitCode, 0, 'aborted build should not succeed');
+  assert.strictEqual(rb.exitCode, 0, 'the queued build of another project should run');
+  assert.strictEqual(isAlive(pid), false, 'the build process should be gone');
+});
+
+test('an already aborted signal never starts the build', async (t) => {
+  const { url } = await startTestDaemon(t);
+  const projectDir = makeProject(t, { 'a.txt': 'a' });
+  await syncProject({ url, name: 'demo', projectDir });
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(
+    () => remoteBuild({ url, name: 'demo', args: [], signal: ac.signal }),
+    /cancelled before/
+  );
+});
+
+test('cancelling an unknown build id is a 404', async (t) => {
+  const { url } = await startTestDaemon(t);
+  const res = await fetch(`${url}/builds/nope/cancel`, { method: 'POST' });
+  assert.strictEqual(res.status, 404);
+});
+
+test('shutdown kills the running build and cancels queued ones before exiting', async (t) => {
+  const exited = Promise.withResolvers();
+  const { url, server } = await startTestDaemon(t, { exit: exited.resolve });
+  const projectDir = makeProject(t, { 'a.txt': 'a' });
+  await syncProject({ url, name: 'demo', projectDir });
+  await syncProject({ url, name: 'other', projectDir });
+
+  const running = startBuild({ url, name: 'demo', args: ['--sleep', '60000'] });
+  const pid = await running.pid;
+  const queued = startBuild({ url, name: 'other', args: [] });
+  await queued.accepted;
+
+  const started = Date.now();
+  server.shutdown('test');
+  assert.strictEqual(await exited.promise, 0);
+  assert.ok(Date.now() - started < 7000, 'should not wait for the SIGKILL fallback');
+  assert.strictEqual(isAlive(pid), false, 'detached build process must be killed');
+  const [rr, rq] = await Promise.all([running.result, queued.result]);
+  assert.notStrictEqual(rr.exitCode, 0);
+  assert.notStrictEqual(rq.exitCode, 0);
+});
+
+test('the manifest cache survives a daemon restart and only re-hashes uploaded entries', async (t) => {
+  const first = await startTestDaemon(t);
+  const projectDir = makeProject(t, { 'a.txt': 'aaaa', 'b.txt': 'bbbb' });
+  await syncProject({ url: first.url, name: 'demo', projectDir });
+  const cacheDir = path.join(first.root, '.manifest-cache');
+  assert.ok(fs.readdirSync(cacheDir).some((f) => f.endsWith('.json')), 'cache file written');
+
+  // same root, new process state: the first sync must still be a no-op
+  const second = await startTestDaemon(t, { root: first.root });
+  const r = await syncProject({ url: second.url, name: 'demo', projectDir });
+  assert.strictEqual(r.needed, 0);
+
+  // A replacement with the same size and mtime as the mirror entry: only a
+  // cache that forgets the uploaded entry hashes the new content. A second
+  // project dir bypasses the client's own size+mtime cache.
+  const mtime = fs.statSync(path.join(projectDir, 'a.txt')).mtime;
+  const other = makeProject(t, { 'a.txt': 'zzzz', 'b.txt': 'bbbb' });
+  fs.utimesSync(path.join(other, 'a.txt'), mtime, mtime);
+  const r2 = await syncProject({ url: second.url, name: 'demo', projectDir: other });
+  assert.strictEqual(r2.needed, 1);
+  assert.strictEqual(fs.readFileSync(path.join(first.root, 'demo', 'a.txt'), 'utf8'), 'zzzz');
+  const r3 = await syncProject({ url: second.url, name: 'demo', projectDir: other });
+  assert.strictEqual(r3.needed, 0, 'stale cached hash would re-upload forever');
 });

@@ -10,4 +10,5 @@ const num = (flag, dflt) => {
   return i === -1 ? dflt : Number(args[i + 1]);
 };
 console.log('fake-ti ran: ' + args.join(' '));
+console.log('fake-ti pid: ' + process.pid);
 setTimeout(() => process.exit(num('--exit', 0)), num('--sleep', 0));
