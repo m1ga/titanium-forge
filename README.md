@@ -59,7 +59,7 @@ ti config forge.hosts.mac.url http://192.168.1.3:7331
 ti config forge.hosts.mac.token SOME_SECRET
 ti config forge.hosts.mac.buildArgs "-p ios -T simulator --no-prompt"
 ti config forge.hosts.mac.dir /Volumes/SSD/builds   # optional, see below
-ti config forge.exclude "dist,tmp"        # optional, comma/space separated
+ti config forge.exclude "tmp,docs"        # optional, comma/space separated
 ```
 
 Every host under `forge.hosts.*` takes part in syncs and builds. `buildArgs` is

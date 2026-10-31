@@ -134,3 +134,56 @@ test('requests without the token are rejected', async (t) => {
   await assert.rejects(() => ping({ url, token: 'wrong' }), /HTTP 401/);
   await ping({ url, token: 'sekret' });
 });
+
+test('a path that changes kind between syncs is replaced in the mirror', async (t) => {
+  const { url, root } = await startTestDaemon(t);
+  const projectDir = makeProject(t, { 'target.txt': 'target' });
+  fs.symlinkSync('target.txt', path.join(projectDir, 'foo'));
+  fs.mkdirSync(path.join(projectDir, 'empty'));
+  await syncProject({ url, name: 'demo', projectDir });
+  assert.ok(fs.lstatSync(path.join(root, 'demo', 'foo')).isSymbolicLink());
+
+  // symlink -> regular file (tar-fs would otherwise write through the link
+  // into target.txt), empty dir -> regular file (EISDIR on extract)
+  fs.unlinkSync(path.join(projectDir, 'foo'));
+  fs.writeFileSync(path.join(projectDir, 'foo'), 'now a file');
+  fs.rmdirSync(path.join(projectDir, 'empty'));
+  fs.writeFileSync(path.join(projectDir, 'empty'), 'also a file');
+  await syncProject({ url, name: 'demo', projectDir });
+
+  const mirror = (rel) => path.join(root, 'demo', rel);
+  assert.ok(fs.lstatSync(mirror('foo')).isFile());
+  assert.strictEqual(fs.readFileSync(mirror('foo'), 'utf8'), 'now a file');
+  assert.strictEqual(fs.readFileSync(mirror('target.txt'), 'utf8'), 'target');
+  assert.ok(fs.lstatSync(mirror('empty')).isFile());
+  const r = await syncProject({ url, name: 'demo', projectDir });
+  assert.strictEqual(r.needed, 0, 'mirror should be in sync after the type change');
+});
+
+test('a corrupt upload is answered with 400 and does not crash the daemon', async (t) => {
+  const { url } = await startTestDaemon(t);
+  const res = await fetch(`${url}/projects/demo/files`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/gzip' },
+    body: Buffer.from('this is not gzip'),
+    signal: AbortSignal.timeout(3000),
+  });
+  assert.strictEqual(res.status, 400);
+  await ping({ url }); // still alive
+});
+
+test('purge never reaches outside or at the project dir itself', async (t) => {
+  const { url, root } = await startTestDaemon(t);
+  const projectDir = makeProject(t, { 'a.txt': 'a' });
+  await syncProject({ url, name: 'demo', projectDir });
+  fs.writeFileSync(path.join(root, 'outside.txt'), 'keep me');
+
+  const res = await fetch(`${url}/projects/demo/manifest`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ files: {}, purge: ['', '.', '..', '../outside.txt', '/'] }),
+  });
+  assert.strictEqual(res.status, 200);
+  assert.ok(fs.existsSync(path.join(root, 'demo')), 'project dir must survive');
+  assert.ok(fs.existsSync(path.join(root, 'outside.txt')));
+});

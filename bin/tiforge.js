@@ -40,7 +40,7 @@ Config lives in "ti config" (~/.titanium/config.json) under the "forge" node:
   ti config forge.hosts.mac.token SECRET
   ti config forge.hosts.mac.buildArgs "-p ios --build-only --no-prompt"
   ti config forge.hosts.mac.dir /Volumes/SSD/builds
-  ti config forge.exclude "dist,tmp"
+  ti config forge.exclude "tmp,docs"
 
 "dir" is an absolute path on the daemon machine to mirror projects into,
 replacing the daemon's own project root (~/.tiforge/projects). The project

@@ -61,8 +61,15 @@ almost always needs the same treatment in both front ends.
 
 ## Testing
 
-There is no test suite and no `npm test`. Verification is manual, and it needs
-two terminals:
+`npm test` runs `node --test test/*.test.js` (no extra dependencies). It
+covers argv parsing, project-name sanitising, the manifest walk/diff, and
+the daemon end to end: an in-process daemon on an ephemeral port with
+`test/fixtures/fake-ti.js` standing in for `ti`, driven through `lib/client.js`.
+Add a test there when you touch sync, the queue, or a route — the daemon
+tests are cheap (the whole suite runs in under a second).
+
+Anything involving a real `ti build`, mDNS, or two machines is still manual
+and needs two terminals:
 
 ```sh
 # terminal 1 — daemon, with an isolated root so nothing real is touched

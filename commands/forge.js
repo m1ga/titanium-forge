@@ -9,6 +9,7 @@
 //   ti forge --sync         sync only, no remote build
 //   ti forge --init         discover daemons into ti config (forge.hosts)
 //   ti forge --discover     list tiForge daemons on the network
+//   ti forge --name ID      override the mirror directory name on the daemon
 
 const path = require('path');
 
@@ -52,6 +53,9 @@ exports.config = function (logger, config, cli) {
         default: '.',
         desc: 'the directory containing the project',
       },
+      name: {
+        desc: 'name of the mirror directory on the daemon (default: the project folder name)',
+      },
       timeout: {
         default: 3000,
         desc: 'mDNS discovery timeout in milliseconds',
@@ -85,10 +89,13 @@ exports.run = function (logger, config, cli, finished) {
       return;
     }
 
-    const { loadConfig } = require(path.join(LIB, 'config'));
+    const { loadConfig, projectName } = require(path.join(LIB, 'config'));
     const { syncProject, runRemote, renderProgress, cancelBuilds } = require(path.join(LIB, 'client'));
     const { DEFAULT_BUILD_ARGS } = require(path.join(LIB, 'init'));
     const cfg = loadConfig(projectDir);
+    // --name goes through the same sanitising as the derived name (as in
+    // bin/tiforge.js), so it cannot produce a name the daemon rejects
+    if (cli.argv.name) cfg.name = projectName(projectDir, cli.argv.name);
     if (!cfg.hosts.length) {
       throw new Error('no hosts configured — run "ti forge --init" first (stores hosts in ti config)');
     }

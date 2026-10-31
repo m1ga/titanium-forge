@@ -24,6 +24,14 @@ test('a leading slash anchors the exclude to the project root', () => {
   assert.strictEqual(isExcluded('modules/foo/Resources/x.js', ['Resources']), true);
 });
 
+test('dist/ is excluded by default at the project root only', () => {
+  const { DEFAULT_EXCLUDES } = require('../lib/manifest');
+  assert.strictEqual(isExcluded('dist/app.zip', DEFAULT_EXCLUDES), true);
+  assert.strictEqual(isExcluded('dist', DEFAULT_EXCLUDES), true);
+  assert.strictEqual(isExcluded('modules/foo/dist/lib.js', DEFAULT_EXCLUDES), false);
+  assert.strictEqual(isExcluded('distribution/x', DEFAULT_EXCLUDES), false);
+});
+
 test('diffManifests reports missing/changed as needed and extraneous as deleted', () => {
   const client = { a: { hash: '1' }, b: { hash: '2' } };
   const server = { b: { hash: 'other' }, c: { hash: '3' } };
